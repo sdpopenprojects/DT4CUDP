@@ -1,6 +1,6 @@
 # General Introduction
 
-This repository provides the code and datasets used in the article: * "The Effect of Data Transformation Techniques on Clustering-based Unsupervised Software Defect Prediction: An Empirical Study" * by Zhengxiang Chen, Zhiqiang Li, Hongyu Zhang, Jie Ren, and Feng Tian, submitted to the *Automated Software Engineering* Journal.
+This repository provides the code and datasets used in the article: *"The Effect of Data Transformation Techniques on Clustering-based Unsupervised Software Defect Prediction: An Empirical Study"* by Zhengxiang Chen, Zhiqiang Li, Hongyu Zhang, Jie Ren, and Feng Tian, submitted to the *Automated Software Engineering* Journal.
 
 ### Environment Preparation
 
@@ -22,7 +22,7 @@ pyclustering>=0.10.0
 
 - `Cluster/` : Create and return the corresponding clustering algorithm model instance based on the input model name.
 
-- `data/` : Contains all experimental datasets (*.arff* and *.csv* files).
+- `data/` : Contains all experimental datasets ('.arff' and '.csv' files).
 
 - `utilities/` : Utility modules for cross-validation, label assignment, performance measurement, ranking, model interpretation, etc.
 
@@ -33,9 +33,11 @@ pyclustering>=0.10.0
 Navigate to the `test/` directory and execute the main programs. The repository provides two entry points:
 
 \# Run experiments for defect prediction performance
+
 `python demo_NCIA.py`
 
 \# Run experiments for model interpretation
+
 `python demo_NCIA_ModeInter.py`
 
 Each script will:
