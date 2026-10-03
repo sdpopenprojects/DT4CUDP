@@ -22,7 +22,7 @@ pyclustering>=0.10.0
 
 - `Cluster/` : Create and return the corresponding clustering algorithm model instance based on the input model name.
 
-- `data/` : Contains all experimental datasets ('.arff' and '.csv' files).
+- `data/` : Contains all experimental datasets (`.arff` and `.csv` files).
 
 - `utilities/` : Utility modules for cross-validation, label assignment, performance measurement, ranking, model interpretation, etc.
 
