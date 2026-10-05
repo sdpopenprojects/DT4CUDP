@@ -1,3 +1,4 @@
+# Earlier driver. The revised experiment is test/demo_NCIA.py.
 import os
 import time
 import warnings

@@ -1,198 +1,137 @@
-import csv
+"""Revised main experiment: clustering-based unsupervised defect prediction.
+
+Run from the repository root:
+
+    python test/demo_NCIA.py --check
+    python test/demo_NCIA.py --smoke
+    python test/demo_NCIA.py
+
+Clustering uses the transformed out-of-bag test features. Labels use the
+original metrics and labelCluster_v4_raw. Finished CSV files are skipped,
+so the same command can be resumed.
+"""
+import argparse
 import os
+import sys
 import time
 import warnings
 
 import numpy as np
-import pandas as pd
-from pyclustering.cluster.somsc import somsc
-from scipy.io import arff
-from sklearn import preprocessing
-from sklearn.preprocessing import MinMaxScaler, PowerTransformer
 
-from Cluster.GetCluster import GetCluster
-from Cluster.get_clustering_model import get_clustering_model_Parameters
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from utilities.CrossValidataion import out_of_sample_bootstrap
 from utilities.File import create_dir, save_results
-
 from utilities.PerformanceMeasure import get_measure
 from utilities.RankMeasure import rank_measure
-from utilities.SC import SC
+from utilities.labelraw_run import (
+    ALL_CLF,
+    ALL_NORMS,
+    ALL_PROJECTS,
+    DATA_DIR,
+    N_CLUSTERS,
+    apply_transform,
+    count_finished_rounds,
+    label_predictions,
+    load_project,
+    missing_datasets,
+    parse_names,
+    run_cluster,
+)
 
-from utilities.column_deletion import remove_constant_columns
-from utilities.labelingCluster import labelCluster_v4
-from utilities.quantile_rank import rank_transform_dataframe
+SAVE_ROOT = os.path.join(ROOT, "result", "test_labelRaw")
 
 
-if __name__ == '__main__':
-    warnings.filterwarnings('ignore')
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the revised performance experiment.")
+    parser.add_argument("--check", action="store_true", help="Verify the 22 datasets and exit.")
+    parser.add_argument("--smoke", action="store_true", help="Short check: Kmeans, original data, EQ, 2 runs.")
+    parser.add_argument("--clf", default="", help="Comma-separated clusterers. Default: all 23.")
+    parser.add_argument("--rep", type=int, default=100, help="Bootstrap repetitions. Default: 100.")
+    return parser.parse_args()
 
-    save_path = r'../result/'
 
-    # CLF = ['ManualUp', 'Kmeans', 'Agglomerative', 'Birch', 'Kmedoids', 'MiniBatchKmeans', 'MeanShift', 'AP', 'Bsas',
-    #        'Cure', 'Dbscan', 'Mbsas', 'Optics', 'Rock', 'Somsc', 'Syncsom', 'Bang', 'KmeansPlus', 'clarans', 'EMA',
-    #        'Fcm', 'Gmeans', 'Ttsas', 'Xmeans']
-    CLF = ['Kmeans', 'Kmedoids', 'Xmeans', 'Fcm', 'Gmeans', 'MiniBatchKmeans', 'KmeansPlus', 'Birch', 'Cure', 'Rock',
-           'Agglomerative', 'Dbscan', 'Optics', 'MeanShift', 'Somsc', 'Syncsom', 'EMA', 'GMM', 'AP', 'SC', 'Bsas',
-           'Mbsas', 'Ttsas']
+def main():
+    warnings.filterwarnings("ignore")
+    args = parse_args()
+    missing = missing_datasets()
+    if missing:
+        raise SystemExit("Missing datasets:\n  " + "\n  ".join(missing))
+    print(f"datasets = {len(ALL_PROJECTS)} under {DATA_DIR}")
+    if args.check:
+        print("dataset check passed")
+        return
 
-    Classfier_model = {'Kmeans', 'Agglomerative', 'Birch', 'Kmedoids', 'MiniBatchKmeans', 'MeanShift', 'AP', 'GMM'}
-    Special_model = {'ManualUp', 'Somsc'}
-    GetCluster_model = {'Bsas', 'Cure', 'Dbscan', 'Mbsas', 'Optics', 'Rock', 'Syncsom', 'Bang', 'KmeansPlus', 'clarans',
-                        'EMA', 'Fcm', 'Gmeans', 'Ttsas', 'Xmeans'}
+    if args.smoke:
+        clusterers = ["Kmeans"]
+        projects = ["EQ"]
+        norms = ["O"]
+        repeats = 2
+    else:
+        clusterers = parse_names(args.clf, ALL_CLF)
+        projects = ALL_PROJECTS
+        norms = ALL_NORMS
+        repeats = args.rep
 
-    path = os.path.abspath('../data/')
+    print("protocol = cluster on transformed features; label on original metrics (labelCluster_v4_raw)")
+    print("save_path =", SAVE_ROOT)
+    print("clusterers =", clusterers)
+    print("transformations =", norms)
+    print("projects =", len(projects))
+    print("Rep =", repeats)
 
-    project_names = ['EQ', 'JDT', 'ML', 'PDE', 'LC', 'ant-1.7', 'camel-1.4', 'ivy-2.0', 'jedit-4.0', 'log4j-1.0',
-                     'poi-2.0', 'tomcat', 'velocity-1.6', 'xalan-2.4', 'xerces-1.3', 'activemq-5.0.0', 'derby-10.5.1.1',
-                     'groovy-1_6_BETA_1', 'hbase-0.94.0', 'hive-0.9.0', 'jruby-1.1', 'wicket-1.3.0-beta2']
-    # project_names = ['activemq-5.0.0']
+    for model_name in clusterers:
+        for normalization_model in norms:
+            for project_name in projects:
+                folder = create_dir(os.path.join(SAVE_ROOT, model_name, normalization_model))
+                csv_path = folder + project_name + ".csv"
+                done = count_finished_rounds(csv_path)
+                if done >= repeats:
+                    print(f"[skip] {model_name} {normalization_model} {project_name} {done}/{repeats}")
+                    continue
 
-    arff_project = {'EQ', 'JDT', 'ML', 'PDE', 'LC'}
-    promise_project = {'ant-1.7', 'camel-1.4', 'ivy-2.0', 'jedit-4.02', 'log4j-1.0', 'poi-2.0', 'tomcat', 'velocity-1.6',
-                       'xalan-2.4', 'xerces-1.3'}
-    JIRA_projiect = {'activemq-5.0.0', 'derby-10.5.1.1', 'groovy-1_6_BETA_1', 'hbase-0.94.0', 'hive-0.9.0', 'jruby-1.1',
-                     'wicket-1.3.0-beta2'}
+                data, bugs, locs = load_project(project_name)
+                if done > 0:
+                    print(
+                        f"[resume] {model_name} {normalization_model} "
+                        f"{project_name} from {done + 1}/{repeats}"
+                    )
 
-    normalization = ['O', 'log', 'Z-score', 'Max-Min']
-
-    n = 2
-
-    pro_num = len(project_names)
-
-    Rep = 100
-
-    for model_name in CLF:
-        for normalization_model in normalization:
-            for i in range(0, pro_num):
-                project_name = project_names[i]
-
-                if project_name in arff_project:
-                    file = os.path.join(path, project_name + '.arff')
-                    data, meta = arff.loadarff(file)
-                    data = pd.DataFrame(data)
-
-                    data.iloc[:, -1] = data.iloc[:, -1].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-                    data['new_col'] = data.iloc[:, -1].replace({'buggy': 1, 'clean': 0}).astype(np.float64)
-                    data = data.drop(data.columns[-2], axis=1)
-                    bugs = data.iloc[:, -1]
-                    LOCs = data['ck_oo_numberOfLinesOfCode']
-
-                elif project_name in JIRA_projiect:
-                    file = os.path.join(path, project_name + '.csv')
-                    data = pd.read_csv(file)
-                    data.iloc[:, -1] = (data.iloc[:, -1] != 0).astype(int)
-
-                    # 删除文字列,无效的bug列，强制转换为数值
-                    data = data.drop(data.columns[[0, -2, -3, -4]], axis=1)
-                    data = data.apply(pd.to_numeric, errors='coerce')
-                    bugs = data.iloc[:, -1]
-                    LOCs = data['CountLine']
-
-                elif project_name in promise_project:
-                    file = os.path.join(path, project_name + '.csv')
-                    data = pd.read_csv(file)
-                    data.iloc[:, -1] = (data.iloc[:, -1] != 0).astype(int)
-
-                    # 删除文字列,无效的bug列，强制转换为数值
-                    data = data.drop(data.columns[[0, 1, 2]], axis=1)
-                    data = data.apply(pd.to_numeric, errors='coerce')
-                    bugs = data.iloc[:, -1]
-                    LOCs = data['loc']
-
-                for loop in range(0, Rep):
-                    print(model_name + '-> ' + normalization_model + ' ' + project_name + ' ' + str(loop + 1) + '/' +
-                          str(Rep) + ' round Start!')
-
-                    train_data, train_label, test_data, test_label, train_idx, test_idx = out_of_sample_bootstrap(data, loop)
-                    LOC = LOCs[test_idx]
+                for loop in range(done, repeats):
+                    print(f"{model_name}-> {normalization_model} {project_name} {loop + 1}/{repeats}")
+                    train_data, _train_label, test_data, test_label, _train_idx, test_idx = (
+                        out_of_sample_bootstrap(data, loop)
+                    )
+                    loc = locs[test_idx]
                     bug = bugs[test_idx]
+                    test_orig = np.asarray(test_data, dtype=float)
+                    _train_t, test_cluster = apply_transform(normalization_model, train_data, test_data)
 
-                    if normalization_model == 'log':
-                        # log transformation
-                        train_data = np.log(train_data + 1)
-                        test_data = np.log(test_data + 1)
-                        # replace -inf with 0
-                        train_data[np.isneginf(train_data)] = 0
-                        test_data[np.isneginf(test_data)] = 0
-                        # replace NaN with 0
-                        train_data = np.nan_to_num(train_data)
-                        test_data = np.nan_to_num(test_data)
-                    elif normalization_model == 'Z-score':
-                        # z-score
-                        train_data = preprocessing.scale(train_data)
-                        test_data = preprocessing.scale(test_data)
-                    elif normalization_model == 'Max-Min':
-                        # 初始化一个MinMaxScaler对象
-                        scaler = MinMaxScaler()
-                        # 计算缩放比例并转换数据
-                        train_data = scaler.fit_transform(train_data)
-                        test_data = scaler.fit_transform(test_data)
-                    elif normalization_model == 'box-cox':
-                        test_data = remove_constant_columns(test_data)
-                        test_data = test_data + 1
-                        pt = PowerTransformer(method='box-cox')
-                        test_data = pt.fit_transform(test_data)
-                    elif normalization_model == 'yeo-johnson':
-                        pt = PowerTransformer(method='yeo-johnson')
-                        test_data = pt.fit_transform(test_data)
-                    elif normalization_model == 'rank-transformation':
-                        test_data = rank_transform_dataframe(test_data)
-                        test_data = np.array(test_data)
-                    elif normalization_model == 'O':
-                        train_data = np.array(train_data)
-                        test_data = np.array(test_data)
-
-                    # running time
                     start = time.perf_counter()
+                    predict_y = run_cluster(model_name, test_cluster, N_CLUSTERS, loop)
+                    predict_y = label_predictions(test_orig, predict_y)
+                    elapsed = time.perf_counter() - start
 
-                    # model
-                    if model_name in Classfier_model:
-                        clf = get_clustering_model_Parameters(model_name, n, loop).getCLF()
-                        predict_y = clf.fit_predict(test_data)
-                    elif model_name in GetCluster_model:
-                        instance = GetCluster(model_name, test_data, n, loop).getCLF()
-                        instance.process()
-                        clusters = instance.get_clusters()
-                        predict_y = [0] * len(test_data)
-                        if clusters:
-                            for gc in range(len(clusters)):
-                                for j in clusters[gc]:
-                                    predict_y[j] = gc
-                    elif model_name == 'ManualUp':
-                        predict_y = [0] * len(test_data)
-                    elif model_name == 'Somsc':
-                        somsc_instance = somsc(test_data, n)
-                        somsc_instance.process()
-                        predict_y = somsc_instance.predict(test_data)
-                    elif model_name == 'SC':
-                        predict_y = SC(test_data)
-
-                    predict_y = labelCluster_v4(test_data, predict_y)
-
-                    end = time.perf_counter()
-                    t = end - start
-
-                    # # calculate non-effort-aware classification measure
                     if not isinstance(bug, np.ndarray):
                         bug = bug.to_numpy().flatten()
-                    test_label = test_label.flatten()
+                    test_label = np.asarray(test_label).flatten()
+                    precision, recall, pf, f_measure, auc, g_measure, g_mean, bal, mcc = get_measure(
+                        test_label, predict_y
+                    )
+                    popt, erecall, eprecision, efmeasure, pmi, ifa = rank_measure(predict_y, loc, test_label)
+                    save_results(
+                        folder + project_name,
+                        [
+                            precision, recall, pf, f_measure, auc, g_measure, g_mean, bal, mcc,
+                            popt, erecall, eprecision, efmeasure, pmi, ifa, elapsed,
+                        ],
+                    )
 
-                    predict_y = np.array(predict_y)
+    print("done")
+    print("Results under:", SAVE_ROOT)
 
-                    predict_y = predict_y.flatten()
-                    precision, recall, pf, f_measure, AUC, g_measure, g_mean, bal, MCC = get_measure(test_label, predict_y)
-                    # # calculate cost-effectiveness measures
-                    Popt, Erecall, Eprecision, Efmeasure, PMI, IFA = rank_measure(predict_y, LOC, test_label)
 
-                    # measure = [precision, recall, pf, f_measure, AUC, g_measure, g_mean, bal, MCC, Popt, Erecall,
-                    #            Eprecision, Efmeasure, PMI, IFA, t]
-                    measure = [precision, recall, pf, f_measure, AUC, g_measure, g_mean, bal, MCC, Popt, Erecall,
-                               Eprecision, Efmeasure, PMI, IFA, t]
-
-                    # append to save
-                    # fres = create_dir(save_path + normalization_model + '/' + model_name)
-                    fres = create_dir(save_path + model_name + '/' + normalization_model)
-                    save_results(fres + project_name, measure)
-
-    print('done!')
+if __name__ == "__main__":
+    main()
